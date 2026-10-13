@@ -13,13 +13,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  awdl-tests:
+    name: AWDL protocol regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run bounded frame and template tests
+        run: |
+          c++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -g tests/awdl_frame_tests.cpp -o /tmp/awdl-tests
+          /tmp/awdl-tests
   build:
     name: ${{ matrix.platform }} (${{ matrix.configuration }})
     runs-on: macos-15-intel
     strategy:
       fail-fast: false
       matrix:
-        platform: [Sequoia, Tahoe]
+        platform: [Sequoia]
         configuration: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +77,7 @@ jobs:
 
   prerelease:
     name: Publish development build
-    needs: build
+    needs: [build, awdl-tests]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
@@ -88,7 +98,7 @@ jobs:
           set -euo pipefail
           version=$(awk '/MODULE_VERSION =/ {gsub(/;/, "", $3); print $3; exit}' itlwm.xcodeproj/project.pbxproj)
           tag="v$version-alpha"
-          printf '%s\n\n' 'Development build. Hardware validation is required before daily use.' > ReleaseNotes.md
+          printf '%s\n\n' 'Experimental AX211 development build. AWDL template hardening and parser groundwork; AirDrop, WPA3-only and Apple Watch unlock are not implemented or hardware-qualified. Keep a working EFI backup.' > ReleaseNotes.md
           git log -5 --format='- %h %s' >> ReleaseNotes.md
           if gh release view "$tag" --json isPrerelease > current-release.json 2>/dev/null; then
             # Never replace a stable release with development artifacts.

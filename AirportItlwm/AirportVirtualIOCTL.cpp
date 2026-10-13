@@ -7,6 +7,7 @@
 //
 
 #include "AirportItlwm.hpp"
+#include "AWDL/Frame.hpp"
 
 
 SInt32 AirportItlwm::
@@ -214,29 +215,41 @@ IOReturn AirportItlwm::
 getSYNC_FRAME_TEMPLATE(OSObject *object, struct apple80211_awdl_sync_frame_template *data)
 {
     XYLog("%s\n", __FUNCTION__);
+    if (!data)
+        return kIOReturnBadArgument;
     if (syncFrameTemplate == NULL || syncFrameTemplateLength == 0)
-        return kIOReturnError;
+        return kIOReturnNotReady;
+    const uint32_t capacity = data->payload_len;
     data->version = APPLE80211_VERSION;
     data->payload_len = syncFrameTemplateLength;
-    memcpy(data->payload, syncFrameTemplate, syncFrameTemplateLength);
+    auto result = AirportAWDL::copyTemplate(syncFrameTemplate,
+        syncFrameTemplateLength, data->payload, capacity);
+    if (result == AirportAWDL::CopyResult::TooSmall)
+        return kIOReturnNoSpace;
+    if (result != AirportAWDL::CopyResult::Copied)
+        return kIOReturnBadArgument;
     return kIOReturnSuccess;
 }
 
 IOReturn AirportItlwm::
 setSYNC_FRAME_TEMPLATE(OSObject *object, struct apple80211_awdl_sync_frame_template *data)
 {
+    if (!data || !AirportAWDL::validTemplateRequest(data->payload, data->payload_len))
+        return kIOReturnBadArgument;
     XYLog("%s payload_len=%d\n", __FUNCTION__, data->payload_len);
-    if (data->payload_len <= 0)
-        return kIOReturnError;
+    // Allocate before discarding the previous valid template. An allocation
+    // failure must not lose the old state or dereference a null allocation.
+    auto replacement = static_cast<uint8_t *>(IOMalloc(data->payload_len));
+    if (!replacement)
+        return kIOReturnNoMemory;
+    memcpy(replacement, data->payload, data->payload_len);
     if (syncFrameTemplate != NULL && syncFrameTemplateLength > 0) {
         IOFree(syncFrameTemplate, syncFrameTemplateLength);
         syncFrameTemplateLength = 0;
         syncFrameTemplate = NULL;
     }
-    syncFrameTemplate = (uint8_t *)IOMalloc(data->payload_len);
+    syncFrameTemplate = replacement;
     syncFrameTemplateLength = data->payload_len;
-    memset(syncFrameTemplate, 0, data->payload_len);
-    memcpy(syncFrameTemplate, data->payload, data->payload_len);
     return kIOReturnSuccess;
 }
 
