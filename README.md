@@ -1,5 +1,19 @@
-[![Version](https://img.shields.io/github/v/tag/laobamac/itlwm?style=flat&label=Downloads)](https://github.com/laobamac/itlwm/releases)
+[![Version](https://img.shields.io/github/v/tag/ElicoftZ/AirportItlwm-AX211?style=flat&label=Downloads)](https://github.com/ElicoftZ/AirportItlwm-AX211/releases)
 # itlwm
+
+## Experimental AX211 / Sequoia fork
+
+This fork builds Sequoia Debug and Release kexts, hardens AWDL sync-template
+handling, and adds a tested, opt-in AWDL receive observer (`awdl_observe=1`).
+The observer tracks bounded peer/frame counts from packets already delivered
+by the firmware. It does not transmit AWDL or advertise a working AirDrop link.
+
+**AirDrop, WPA3-only and Apple Watch unlock are not yet implemented or
+hardware-qualified.** Keep a working EFI backup. See
+[development status and remaining work](AX211-DEVELOPMENT.md) and
+[experimental downloads](https://github.com/ElicoftZ/AirportItlwm-AX211/releases).
+
+The upstream driver notes below describe the base fork's Wi-Fi behavior.
 
 **An Intel Wi-Fi Adapter Kernel Extension for macOS, based on the OpenBSD Project.**
 
