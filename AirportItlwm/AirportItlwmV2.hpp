@@ -11,6 +11,7 @@
 
 #include "Apple80211.h"
 #ifdef AIRPORT_WCL
+#include "AWDL/Peers.hpp"
 #if __IO80211_TARGET == __MAC_15_2
 #include <Airport/macOS15/FaultReporter.h>
 #else
@@ -118,6 +119,12 @@ public:
     
     static IOReturn tsleepHandler(OSObject* owner, void* arg0 = 0, void* arg1 = 0, void* arg2 = 0, void* arg3 = 0);
     static void eventHandler(struct ieee80211com *, int, void *);
+#ifdef AIRPORT_WCL
+    static IOReturn observeAWDLGated(OSObject *, void *, void *, void *, void *);
+    AirportAWDL::PeerTable awdlObservedPeers;
+    uint64_t awdlObservedFrames = 0;
+    uint64_t awdlObservedMalformed = 0;
+#endif
     IOReturn enableAdapter(IONetworkInterface *netif);
     void disableAdapter(IONetworkInterface *netif);
     bool initCCLogs();

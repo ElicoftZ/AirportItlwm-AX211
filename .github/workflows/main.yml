@@ -23,6 +23,9 @@ jobs:
           c++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
             -fno-omit-frame-pointer -g tests/awdl_frame_tests.cpp -o /tmp/awdl-tests
           /tmp/awdl-tests
+          c++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -g tests/awdl_peer_tests.cpp -o /tmp/awdl-peer-tests
+          /tmp/awdl-peer-tests
   build:
     name: ${{ matrix.platform }} (${{ matrix.configuration }})
     runs-on: macos-15-intel

@@ -8,8 +8,19 @@ The first change fixes unchecked allocation and caller-buffer writes in
 AWDL sync-template IOCTLs. A new independent wire-format parser validates
 AWDL vendor action headers and bounded little-endian TLVs. It is a foundation
 for reception and peer discovery, not an operational radio/AirDrop stack.
-The parser is not yet attached to RX/TX, and no feature capabilities are
-enabled based on it. Existing firmware and radio behavior remain in use.
+The parser is attached to an opt-in receive observer (`awdl_observe=1`). A
+bounded 16-entry table records valid unicast peer identities and ages entries
+when subsequent frames arrive. Only peer counts, frame counts and observation
+timestamps are published; peer addresses are not published. Observation does
+not authenticate peers or establish an AWDL link. It uses frames the firmware
+already delivers on its current channel; firmware filtering may deliver none.
+No firmware filters, channels or AirDrop/Watch capabilities are changed.
+
+IORegistry properties on AirportItlwm: AWDLObservationEnabled,
+AWDLObservedFrames, AWDLObservedMalformed, AWDLObservedPeerCount and
+AWDLObservationTimestampMS. Peer count describes the last observation, not
+a continuously refreshed or authenticated peer list. This build still cannot
+transmit AWDL, schedule availability windows or complete an AirDrop transfer.
 
 Next required work:
 

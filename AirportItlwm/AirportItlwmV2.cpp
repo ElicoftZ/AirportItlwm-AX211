@@ -11,6 +11,10 @@
 #include <crypto/sha1.h>
 #include <net80211/ieee80211_priv.h>
 #include <net80211/ieee80211_var.h>
+#ifdef AIRPORT_WCL
+#include <kern/clock.h>
+#include <mach/mach_time.h>
+#endif
 
 #include "AirportItlwmSkywalkInterface.hpp"
 #include "IOPCIEDeviceWrapper.hpp"
@@ -90,6 +94,11 @@ eventHandler(struct ieee80211com *ic, int msgCode, void *data)
 #ifdef AIRPORT_WCL
     if (!that)
         return;
+    if (msgCode == IEEE80211_EVT_AWDL_ACTION) {
+        if (_fCommandGate)
+            _fCommandGate->runAction(observeAWDLGated, data);
+        return;
+    }
 #endif
     IO80211SkywalkInterface *interface = that->fNetIf;
     if (!interface)
@@ -120,6 +129,31 @@ void AirportItlwm::watchdogAction(IOTimerEventSource *timer)
 
     watchdogTimer->setTimeoutMS(kWatchDogTimerPeriod);
 }
+
+#ifdef AIRPORT_WCL
+IOReturn AirportItlwm::observeAWDLGated(OSObject *owner, void *arg,
+                                      void *, void *, void *)
+{
+    auto self = OSDynamicCast(AirportItlwm, owner);
+    auto event = static_cast<ieee80211_awdl_action_event *>(arg);
+    if (!self || !event || !event->frame || event->length < 40 ||
+        event->length > AirportAWDL::MaxTemplateSize) return kIOReturnBadArgument;
+    auto bytes = static_cast<uint8_t *>(IOMalloc(event->length));
+    if (!bytes) return kIOReturnNoMemory;
+    uint64_t nanoseconds = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &nanoseconds);
+    bool valid = mbuf_copydata(event->frame, 0, event->length, bytes) == 0 &&
+        self->awdlObservedPeers.observe(bytes, event->length, nanoseconds / 1000000);
+    IOFree(bytes, event->length);
+    if (valid) ++self->awdlObservedFrames;
+    else ++self->awdlObservedMalformed;
+    self->setProperty("AWDLObservedFrames", self->awdlObservedFrames, 64);
+    self->setProperty("AWDLObservedMalformed", self->awdlObservedMalformed, 64);
+    self->setProperty("AWDLObservedPeerCount", self->awdlObservedPeers.count(), 32);
+    self->setProperty("AWDLObservationTimestampMS", nanoseconds / 1000000, 64);
+    return valid ? kIOReturnSuccess : kIOReturnBadArgument;
+}
+#endif
 
 void AirportItlwm::fakeScanDone(OSObject *owner, IOTimerEventSource *sender)
 {
@@ -324,6 +358,12 @@ bool AirportItlwm::start(IOService *provider)
     }
     fHalService->initWithController(this, _fWorkloop, _fCommandGate);
     fHalService->get80211Controller()->ic_event_handler = eventHandler;
+#ifdef AIRPORT_WCL
+    int awdl_observe = 0;
+    bool observing = PE_parse_boot_argn("awdl_observe", &awdl_observe, sizeof(awdl_observe)) && awdl_observe == 1;
+    fHalService->get80211Controller()->ic_wcl_awdl_observe = observing;
+    setProperty("AWDLObservationEnabled", observing);
+#endif
 
     if (PE_parse_boot_argn("-novht", &boot_value, sizeof(boot_value)))
         fHalService->get80211Controller()->ic_userflags |= IEEE80211_F_NOVHT;

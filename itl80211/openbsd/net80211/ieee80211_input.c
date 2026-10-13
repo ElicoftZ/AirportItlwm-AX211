@@ -635,6 +635,23 @@ ieee80211_inputm(struct _ifnet *ifp, mbuf_t m, struct ieee80211_node *ni,
                 ic->ic_stats.is_rx_wrongdir++;
                 goto err;
             }
+#ifdef AIRPORT_WCL
+            // Observe only already-delivered, unprotected vendor action frames.
+            // This does not enable monitor mode or change firmware RX filters.
+            if (ic->ic_wcl_awdl_observe && ic->ic_event_handler &&
+                subtype == IEEE80211_FC0_SUBTYPE_ACTION &&
+                !(wh->i_fc[1] & (IEEE80211_FC1_PROTECTED | IEEE80211_FC1_ORDER)) &&
+                mbuf_pkthdr_len(m) >= 40 && mbuf_pkthdr_len(m) <= 4096 &&
+                !IEEE80211_ADDR_EQ(wh->i_addr2, ic->ic_myaddr)) {
+                uint8_t signature[5];
+                if (mbuf_copydata(m, 24, sizeof(signature), signature) == 0 &&
+                    signature[0] == 127 && signature[1] == 0 &&
+                    signature[2] == 0x17 && signature[3] == 0xf2 && signature[4] == 8) {
+                    struct ieee80211_awdl_action_event event = {m, mbuf_pkthdr_len(m)};
+                    ic->ic_event_handler(ic, IEEE80211_EVT_AWDL_ACTION, &event);
+                }
+            }
+#endif
 #ifndef IEEE80211_STA_ONLY
             if (ic->ic_opmode == IEEE80211_M_AHDEMO) {
                 ic->ic_stats.is_rx_ahdemo_mgt++;

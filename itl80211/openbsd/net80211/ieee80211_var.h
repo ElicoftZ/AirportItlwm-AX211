@@ -451,6 +451,7 @@ struct ieee80211com {
     uint32_t ic_wcl_scan_away_time_ms;
     uint64_t ic_wcl_tx_packets[4];
     uint64_t ic_wcl_rx_packets[4];
+    bool ic_wcl_awdl_observe;
 #endif
     void            (*ic_event_handler)(struct ieee80211com *, int, void *);
 	CTimeout*		ic_bgscan_timeout;
@@ -693,6 +694,11 @@ struct ieee80211_ess {
 #define IEEE80211_EVT_DRIVER_READY 6
 #define IEEE80211_EVT_DRIVER_STOPPED 7
 #define IEEE80211_EVT_DRIVER_RESET_BEGIN 8
+#define IEEE80211_EVT_AWDL_ACTION 9
+struct ieee80211_awdl_action_event {
+    mbuf_t frame; // Borrowed, valid only during the synchronous callback.
+    size_t length;
+};
 struct ieee80211_beacon_event {
     const struct ieee80211_node *node;
     const uint8_t *ies;
