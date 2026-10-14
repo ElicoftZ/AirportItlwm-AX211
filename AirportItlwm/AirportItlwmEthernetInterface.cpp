@@ -12,6 +12,7 @@
 #include <net80211/ieee80211_var.h>
 #ifdef AIRPORT_WCL
 #include <IOKit/IOCommandGate.h>
+#include "AirportItlwmV2.hpp"
 extern IOCommandGate *_fCommandGate;
 #endif
 
@@ -57,6 +58,11 @@ attachToDataLinkLayer( IOOptionBits options, void *parameter )
         IOEthernetAddress addr;
         interface->setProperty("built-in", OSData::withBytes(&builtIn, sizeof(builtIn)));
         snprintf(infName, sizeof(infName), "%s%u", ifnet_name(getIfnet()), ifnet_unit(getIfnet()));
+#ifdef AIRPORT_WCL
+        auto airport = OSDynamicCast(AirportItlwm, getController());
+        if (airport && airport->ethernetMode)
+            airport->setProperty("HybridControlBSDName", infName);
+#endif
         interface->setProperty("IOInterfaceName", OSString::withCString(infName));
         interface->setProperty(kIOInterfaceUnit, OSNumber::withNumber(ifnet_unit(getIfnet()), 8));
         interface->setProperty(kIOInterfaceNamePrefix, OSString::withCString(ifnet_name(getIfnet())));
@@ -199,3 +205,107 @@ inputPacket(mbuf_t packet, UInt32 length, IOOptionBits options, void *param)
 #endif
     return IOEthernetInterface::inputPacket(packet, length, options, param);
 }
+
+#ifdef AIRPORT_WCL
+OSDefineMetaClassAndStructors(AirportItlwmDataController, IOEthernetController);
+OSDefineMetaClassAndStructors(AirportItlwmDataInterface, IOEthernetInterface);
+
+bool AirportItlwmDataController::initWithOwner(AirportItlwm *airport) {
+    owner = airport;
+    return owner && IOEthernetController::init();
+}
+bool AirportItlwmDataController::createWorkLoop() { return owner && owner->getWorkLoop(); }
+IOWorkLoop *AirportItlwmDataController::getWorkLoop() const { return owner ? owner->getWorkLoop() : nullptr; }
+IONetworkInterface *AirportItlwmDataController::createInterface() {
+    auto interface = new AirportItlwmDataInterface;
+    if (interface && !interface->init(this)) { interface->release(); interface = nullptr; }
+    return interface;
+}
+bool AirportItlwmDataController::start(IOService *provider) {
+    if (!IOEthernetController::start(provider)) return false;
+    auto media = OSDictionary::withCapacity(1);
+    auto medium = IONetworkMedium::medium(kIOMediumEthernetAuto, 0);
+    if (!media || !medium) {
+        OSSafeReleaseNULL(media); OSSafeReleaseNULL(medium);
+        IOEthernetController::stop(provider); return false;
+    }
+    IONetworkMedium::addMedium(media, medium);
+    bool published = publishMediumDictionary(media);
+    if (published) setSelectedMedium(medium);
+    medium->release(); media->release();
+    if (!published || !attachInterface(&dataInterface, false)) {
+        IOEthernetController::stop(provider); return false;
+    }
+    setProperty("HybridEthernetDataController", true);
+    dataInterface->setProperty("HybridEthernetData", true);
+    setLinkStatus(kIONetworkLinkValid);
+    dataInterface->registerService(); registerService();
+    return true;
+}
+void AirportItlwmDataController::stop(IOService *provider) {
+    if (dataInterface) {
+#ifdef __PRIVATE_SPI__
+        dataInterface->stopOutputThread(); dataInterface->flushOutputQueue();
+#endif
+        detachInterface(dataInterface, true);
+        OSSafeReleaseNULL(dataInterface);
+    }
+    IOEthernetController::stop(provider);
+}
+bool AirportItlwmDataController::configureInterface(IONetworkInterface *interface) {
+    return IOEthernetController::configureInterface(interface) && owner->bindEthernetDataInterface(interface);
+}
+IOReturn AirportItlwmDataController::enable(IONetworkInterface *) {
+    // Native WCL owns radio power and association. An Ethernet service must
+    // not reset firmware or change the network when DHCP opens the interface.
+#ifdef __PRIVATE_SPI__
+    if (linkUp && dataInterface) dataInterface->startOutputThread();
+#endif
+    return kIOReturnSuccess;
+}
+IOReturn AirportItlwmDataController::disable(IONetworkInterface *interface) {
+#ifdef __PRIVATE_SPI__
+    interface->stopOutputThread(); interface->flushOutputQueue();
+#endif
+    return kIOReturnSuccess;
+}
+UInt32 AirportItlwmDataController::outputPacket(mbuf_t packet, void *parameter) {
+    return owner->outputPacket(packet, parameter);
+}
+#ifdef __PRIVATE_SPI__
+IOReturn AirportItlwmDataController::outputStart(IONetworkInterface *interface, IOOptionBits options) {
+    return owner->outputStart(interface, options);
+}
+#endif
+IOReturn AirportItlwmDataController::getHardwareAddress(IOEthernetAddress *address) { return owner->getHardwareAddress(address); }
+IOReturn AirportItlwmDataController::setMulticastMode(IOEnetMulticastMode mode) { return owner->setMulticastMode(mode); }
+IOReturn AirportItlwmDataController::setPromiscuousMode(IOEnetPromiscuousMode mode) { return owner->setPromiscuousMode(mode); }
+UInt32 AirportItlwmDataController::getFeatures() const { return owner->getFeatures(); }
+const OSString *AirportItlwmDataController::newVendorString() const { return OSString::withCString("Intel"); }
+const OSString *AirportItlwmDataController::newModelString() const { return OSString::withCString("Intel Wi-Fi Ethernet"); }
+void AirportItlwmDataController::updateCarrier(bool active) {
+    if (!dataInterface || active == linkUp) return;
+    linkUp = active;
+    setLinkStatus(kIONetworkLinkValid | (active ? kIONetworkLinkActive : 0));
+#ifdef __PRIVATE_SPI__
+    if (active) dataInterface->startOutputThread();
+    else { dataInterface->stopOutputThread(); dataInterface->flushOutputQueue(); }
+#endif
+}
+IOReturn AirportItlwmDataController::updateAddress(const UInt8 *address, UInt32 length) {
+    if (!dataInterface || !dataInterface->getIfnet()) return kIOReturnSuccess;
+    if (ifnet_set_lladdr(dataInterface->getIfnet(), address, length)) return kIOReturnError;
+    dataInterface->setProperty(kIOMACAddress, const_cast<UInt8 *>(address), length);
+    return kIOReturnSuccess;
+}
+IOReturn AirportItlwmDataInterface::attachToDataLinkLayer(IOOptionBits options, void *parameter) {
+    IOReturn status = IOEthernetInterface::attachToDataLinkLayer(options, parameter);
+    auto controller = OSDynamicCast(AirportItlwmDataController, getController());
+    if (status == kIOReturnSuccess && controller && controller->owner) {
+        char name[IFNAMSIZ];
+        snprintf(name, sizeof(name), "%s%u", ifnet_name(getIfnet()), ifnet_unit(getIfnet()));
+        controller->owner->setProperty("HybridDataBSDName", name);
+    }
+    return status;
+}
+#endif

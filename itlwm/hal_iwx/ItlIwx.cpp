@@ -6069,6 +6069,9 @@ iwx_clear_oactive(struct iwx_softc *sc, struct iwx_tx_ring *ring)
         }
 #ifdef __PRIVATE_SPI__
         ifp->iface->signalOutputThread();
+#ifdef AIRPORT_WCL
+        if (ifp->control_iface) ifp->control_iface->signalOutputThread();
+#endif
 #endif
     }
 }

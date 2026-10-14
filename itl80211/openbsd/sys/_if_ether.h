@@ -159,6 +159,9 @@ struct ether_multi {
 
 struct _ifnet {                /* and the entries */
     IOEthernetInterface *iface;
+#ifdef AIRPORT_WCL
+    IOEthernetInterface *control_iface;
+#endif
     IOEthernetController* controller;
     int if_link_state;
     void *if_softc;

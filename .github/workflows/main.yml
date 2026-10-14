@@ -34,6 +34,9 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer -g -I/tmp \
             tests/iwx_rx_timer_integration.cpp -o /tmp/iwx-rx-integration
           /tmp/iwx-rx-integration
+          c++ -std=c++14 -Wall -Wextra -Werror -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -g tests/hybrid_traffic_tests.cpp -o /tmp/hybrid-tests
+          /tmp/hybrid-tests
   build:
     name: ${{ matrix.platform }} (${{ matrix.configuration }})
     runs-on: macos-15-intel

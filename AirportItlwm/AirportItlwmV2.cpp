@@ -17,6 +17,7 @@
 #endif
 
 #include "AirportItlwmSkywalkInterface.hpp"
+#include "HybridTraffic.hpp"
 #include "IOPCIEDeviceWrapper.hpp"
 
 #define super IO80211Controller
@@ -31,6 +32,20 @@ void AirportItlwm::releaseAll()
 #ifdef AIRPORT_WCL
     if (fNetIf)
         static_cast<AirportItlwmSkywalkInterface *>(fNetIf)->stopWCL();
+    if (ethernetDataController) {
+        if (fHalService) {
+            auto ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
+            ifp->control_iface = nullptr;
+            ifp->iface = bsdInterface;
+            auto stats = bsdInterface ? bsdInterface->getParameter(kIONetworkStatsKey) : nullptr;
+            ifp->netStat = stats ? static_cast<IONetworkStats *>(stats->getBuffer()) : nullptr;
+            fpNetStats = ifp->netStat;
+        }
+        if (ethernetDataStarted) ethernetDataController->stop(this);
+        ethernetDataController->detach(this);
+        OSSafeReleaseNULL(ethernetDataController);
+        ethernetDataStarted = false;
+    }
     OSSafeReleaseNULL(driverFaultReporter);
     OSSafeReleaseNULL(driverCoreFaultReporter);
     OSSafeReleaseNULL(driverFaultStream);
@@ -105,6 +120,7 @@ eventHandler(struct ieee80211com *ic, int msgCode, void *data)
         return;
 #ifdef AIRPORT_WCL
     static_cast<AirportItlwmSkywalkInterface *>(interface)->handleWCLEvent(msgCode, data);
+    that->updateEthernetCarrier();
 #else
     switch (msgCode) {
         case IEEE80211_EVT_COUNTRY_CODE_UPDATE:
@@ -134,6 +150,35 @@ void AirportItlwm::watchdogAction(IOTimerEventSource *timer)
 }
 
 #ifdef AIRPORT_WCL
+bool AirportItlwm::bindEthernetDataInterface(IONetworkInterface *interface)
+{
+    auto ethernet = OSDynamicCast(IOEthernetInterface, interface);
+    auto data = interface->getParameter(kIONetworkStatsKey);
+    if (!ethernet || !data || !data->getBuffer()) return false;
+#ifdef __PRIVATE_SPI__
+    if (interface->configureOutputPullModel(fHalService->getDriverInfo()->getTxQueueSize(),
+            kIONetworkWorkLoopSynchronous, 0,
+            IOEthernetInterface::kOutputPacketSchedulingModelNormal, 0) != kIOReturnSuccess)
+        return false;
+#endif
+    auto ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
+    ifp->control_iface = bsdInterface;
+    ifp->iface = ethernet;
+    ifp->netStat = static_cast<IONetworkStats *>(data->getBuffer());
+    fpNetStats = ifp->netStat;
+    return true;
+}
+
+void AirportItlwm::updateEthernetCarrier()
+{
+    if (!ethernetDataController || !fHalService) return;
+    auto ic = fHalService->get80211Controller();
+    ethernetDataController->updateCarrier(AirportHybrid::carrier(
+        (ic->ic_if.if_flags & IFF_RUNNING) != 0, ic->ic_state == IEEE80211_S_RUN,
+        (ic->ic_flags & IEEE80211_F_RSNON) != 0,
+        ic->ic_bss && ic->ic_bss->ni_port_valid));
+}
+
 void AirportItlwm::publishPacketDiagnostics()
 {
     // The watchdog already runs on the driver workloop. Keep allocations and
@@ -399,6 +444,10 @@ bool AirportItlwm::start(IOService *provider)
     int packet_diag = 0;
     packetDiagnosticsEnabled = PE_parse_boot_argn("itlwm_diag", &packet_diag, sizeof(packet_diag)) && packet_diag == 1;
     setProperty("PacketDiagnosticsEnabled", packetDiagnosticsEnabled);
+    int ethernet_mode = 0;
+    ethernetMode = PE_parse_boot_argn("itlwm_ethernet", &ethernet_mode, sizeof(ethernet_mode)) && ethernet_mode == 1;
+    setProperty("HybridEthernetMode", ethernetMode);
+    fHalService->get80211Controller()->ic_ac.ac_if.control_iface = nullptr;
 #endif
 
     if (PE_parse_boot_argn("-novht", &boot_value, sizeof(boot_value)))
@@ -535,6 +584,16 @@ bool AirportItlwm::start(IOService *provider)
 
 #endif
     setLinkStatus(kIONetworkLinkValid);
+#ifdef AIRPORT_WCL
+    if (ethernetMode) {
+        ethernetDataController = new AirportItlwmDataController;
+        if (!ethernetDataController || !ethernetDataController->initWithOwner(this) ||
+            !ethernetDataController->attach(this) || !ethernetDataController->start(this)) {
+            super::stop(provider); releaseAll(); return false;
+        }
+        ethernetDataStarted = true;
+    }
+#endif
     if (TAILQ_EMPTY(&fHalService->get80211Controller()->ic_ess))
         fHalService->get80211Controller()->ic_flags |= IEEE80211_F_AUTO_JOIN;
 #ifdef AIRPORT_WCL
@@ -746,6 +805,7 @@ setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *ar
     AirportItlwm *that = OSDynamicCast(AirportItlwm, target);
 #ifdef AIRPORT_WCL
     that->bsdInterface->setLinkState((IO80211LinkState)(uint64_t)arg0);
+    that->updateEthernetCarrier();
     static_cast<AirportItlwmSkywalkInterface *>(that->fNetIf)->handleWCLLink(
         (IO80211LinkState)(uint64_t)arg0 == kIO80211NetworkLinkUp);
     return kIOReturnSuccess;
@@ -939,6 +999,8 @@ IOReturn AirportItlwm::setHardwareAddress(const void *addrP, UInt32 addrBytes)
     if (error)
         return kIOReturnError;
     bsdInterface->setProperty(kIOMACAddress, const_cast<UInt8 *>(address), addrBytes);
+    if (ethernetDataController && ethernetDataController->updateAddress(address, addrBytes) != kIOReturnSuccess)
+        return kIOReturnError;
     // WCL replays the current address after every driver-available notification.
     // Keep BSD synchronized, but do not restart firmware for a replay.
     if (update == AirportWCL::MacUpdate::Unchanged) {

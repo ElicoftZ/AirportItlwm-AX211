@@ -24,6 +24,9 @@ extern "C" {
 #include <net/bpf.h>
 }
 #include <IOKit/IOCommandGate.h>
+#ifdef AIRPORT_WCL
+#include "../../../AirportItlwm/HybridTraffic.hpp"
+#endif
 
 extern IOCommandGate *_fCommandGate;
 
@@ -35,6 +38,9 @@ static IOReturn _if_input(OSObject *target, void *arg0, void *arg1, void *arg2, 
 {
     mbuf_t m;
     bool isEmpty = true;
+#ifdef AIRPORT_WCL
+    bool controlQueued = false;
+#endif
     struct _ifnet *ifq = (struct _ifnet *)arg0;
     struct mbuf_list *ml = (struct mbuf_list *)arg1;
     IOEthernetInterface *iface = ifq->iface;
@@ -46,6 +52,23 @@ static IOReturn _if_input(OSObject *target, void *arg0, void *arg1, void *arg2, 
     
     while ((m = ml_dequeue(ml)) != NULL) {
         isEmpty = false;
+#ifdef AIRPORT_WCL
+        if (ifq->control_iface) {
+            uint8_t header[14];
+            auto destination = mbuf_copydata(m, 0, sizeof(header), header) ?
+                AirportHybrid::Destination::Drop : AirportHybrid::destination(header, sizeof(header));
+            if (destination == AirportHybrid::Destination::Drop) {
+                mbuf_freem(m);
+                if (ifq->netStat) ++ifq->netStat->inputErrors;
+                continue;
+            }
+            if (destination == AirportHybrid::Destination::Control) {
+                ifq->control_iface->inputPacket(m, 0, IONetworkInterface::kInputOptionQueuePacket);
+                controlQueued = true;
+                continue;
+            }
+        }
+#endif
         iface->inputPacket(m, 0, IONetworkInterface::kInputOptionQueuePacket);
         if (ifq->netStat != NULL) {
             ifq->netStat->inputPackets++;
@@ -54,6 +77,9 @@ static IOReturn _if_input(OSObject *target, void *arg0, void *arg1, void *arg2, 
     if (!isEmpty) {
         iface->flushInputQueue();
     }
+#ifdef AIRPORT_WCL
+    if (controlQueued) ifq->control_iface->flushInputQueue();
+#endif
     return kIOReturnSuccess;
 }
 

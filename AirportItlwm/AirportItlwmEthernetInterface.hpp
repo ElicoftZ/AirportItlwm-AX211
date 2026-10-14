@@ -18,6 +18,43 @@ extern "C" {
 #include <sys/kernel_types.h>
 #include <IOKit/network/IOEthernetInterface.h>
 
+#ifdef AIRPORT_WCL
+class AirportItlwm;
+class AirportItlwmDataController : public IOEthernetController {
+    OSDeclareDefaultStructors(AirportItlwmDataController)
+public:
+    bool initWithOwner(AirportItlwm *);
+    bool start(IOService *) override;
+    void stop(IOService *) override;
+    bool createWorkLoop() override;
+    IOWorkLoop *getWorkLoop() const override;
+    IONetworkInterface *createInterface() override;
+    bool configureInterface(IONetworkInterface *) override;
+    IOReturn enable(IONetworkInterface *) override;
+    IOReturn disable(IONetworkInterface *) override;
+    UInt32 outputPacket(mbuf_t, void *) override;
+#ifdef __PRIVATE_SPI__
+    IOReturn outputStart(IONetworkInterface *, IOOptionBits) override;
+#endif
+    IOReturn getHardwareAddress(IOEthernetAddress *) override;
+    IOReturn setMulticastMode(IOEnetMulticastMode) override;
+    IOReturn setPromiscuousMode(IOEnetPromiscuousMode) override;
+    UInt32 getFeatures() const override;
+    const OSString *newVendorString() const override;
+    const OSString *newModelString() const override;
+    void updateCarrier(bool);
+    IOReturn updateAddress(const UInt8 *, UInt32);
+    AirportItlwm *owner = nullptr;
+    IONetworkInterface *dataInterface = nullptr;
+    bool linkUp = false;
+};
+class AirportItlwmDataInterface : public IOEthernetInterface {
+    OSDeclareDefaultStructors(AirportItlwmDataInterface)
+public:
+    IOReturn attachToDataLinkLayer(IOOptionBits, void *) override;
+};
+#endif
+
 class AirportItlwmEthernetInterface : public IOEthernetInterface {
     OSDeclareDefaultStructors(AirportItlwmEthernetInterface)
     

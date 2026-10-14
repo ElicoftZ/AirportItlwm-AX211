@@ -122,6 +122,11 @@ public:
 #ifdef AIRPORT_WCL
     static IOReturn observeAWDLGated(OSObject *, void *, void *, void *, void *);
     void publishPacketDiagnostics();
+    bool bindEthernetDataInterface(IONetworkInterface *);
+    void updateEthernetCarrier();
+    bool ethernetMode = false;
+    bool ethernetDataStarted = false;
+    AirportItlwmDataController *ethernetDataController = nullptr;
     bool packetDiagnosticsEnabled = false;
     uint64_t wclScanRequests = 0;
     uint64_t wclFastScanRequests = 0;
