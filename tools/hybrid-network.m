@@ -119,7 +119,10 @@ static void restoreBackup(SCPreferencesRef prefs, NSDictionary *backup) {
             require(SCNetworkServiceRemove(service), @"Remove created data service failed"); CFRelease(service);
         }
     }
-    require(SCNetworkSetSetServiceOrder(set, (__bridge CFArrayRef)backup[@"Order"]), @"Restore service order failed");
+    // Apple's API removes the order key for an empty array. It returns NoKey
+    // if that key is already absent, which is already the desired state.
+    if (SCNetworkSetGetServiceOrder(set) || [backup[@"Order"] count] > 0)
+        require(SCNetworkSetSetServiceOrder(set, (__bridge CFArrayRef)backup[@"Order"]), @"Restore service order failed");
     CFRelease(set);
 }
 static SCNetworkInterfaceRef findInterface(NSString *name) {
@@ -149,7 +152,8 @@ static int selfTest(void) {
     require(service != NULL, @"Fixture service failed");
     require(SCNetworkServiceEstablishDefaultConfiguration(service), @"Fixture defaults failed");
     SCNetworkSetRef set = SCNetworkSetCreate(prefs);
-    require(set && SCNetworkSetAddService(set, service), @"Fixture location failed");
+    require(set && SCNetworkSetSetName(set, CFSTR("Uncommitted hybrid fixture")), @"Fixture location failed");
+    require(SCNetworkSetAddService(set, service), @"Fixture service membership failed");
     NSString *identifier = (__bridge NSString *)SCNetworkServiceGetServiceID(service);
     require(SCNetworkSetSetServiceOrder(set, (__bridge CFArrayRef)@[identifier]), @"Fixture service order failed");
     NSDictionary *before = snapshot(service);
@@ -170,11 +174,13 @@ static int selfTest(void) {
     restoreService(service, absent);
     require([snapshot(service) isEqual:absent], @"Absent IP protocol roundtrip failed");
     // Exercise restoration when the helper created a data service. This fixture
-    // has a separate empty location and is still never committed/applied.
+    // uses the now-empty named location and is never committed/applied.
     require(SCNetworkSetRemoveService(set, service) && SCNetworkServiceRemove(service), @"Fixture service cleanup failed");
     CFRelease(service);
     service = SCNetworkServiceCreate(prefs, ethernet);
-    require(service && SCNetworkServiceEstablishDefaultConfiguration(service) && SCNetworkSetAddService(set, service), @"Created-service fixture failed");
+    require(service != NULL, @"Created-service allocation fixture failed");
+    require(SCNetworkServiceEstablishDefaultConfiguration(service), @"Created-service defaults fixture failed");
+    require(SCNetworkSetAddService(set, service), @"Created-service membership fixture failed");
     identifier = (__bridge NSString *)SCNetworkServiceGetServiceID(service);
     backup = @{@"Services": @[], @"CreatedDataService": identifier,
         @"DataBSDName": bsdName(service), @"SetID": (__bridge NSString *)SCNetworkSetGetSetID(set), @"Order": @[]};
