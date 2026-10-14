@@ -14,7 +14,7 @@ if [[ "${1:-}" != "--test-only" ]]; then
     sudo "$temp/hybrid-network" --apply "$backup"
 fi
 data="$(ioreg -r -c AirportItlwm -d 2 | awk -F '"' '/"HybridDataBSDName" = / { print $(NF-1); exit }')"
-[[ "$data" =~ ^en[0-9]+$ ]] || { echo "The hybrid data interface was not found. Run RESTORE-NETWORK.sh to undo setup."; exit 1; }
+[[ "$data" =~ ^(en|itl)[0-9]+$ ]] || { echo "The hybrid data interface was not found. Run RESTORE-NETWORK.sh to undo setup."; exit 1; }
 report="$dir/REPORT-$(date +%Y%m%d-%H%M%S)"
 mkdir "$report"
 sw_vers > "$report/macos.txt"

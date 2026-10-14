@@ -19,6 +19,8 @@ the Ethernet interface, and teardown detaches it before the HAL/workloop dies.
 
 IORegistry reports `HybridControlBSDName`, `HybridDataBSDName` and
 `HybridEthernetMode`. These names must be discovered, not assumed to be en0/en1.
+The Ethernet data interface uses the `itl` BSD name prefix (for example `itl0`);
+IONetworkStack assigns its unit. Native Wi-Fi keeps its existing `en` prefix.
 The setup helper creates an Ethernet DHCP service and disables IPv4 and IPv6 on
 the corresponding Wi-Fi control service. It preserves those service settings
 for restoration. Native Wi-Fi may show no IP address while Ethernet has it.
@@ -28,3 +30,16 @@ this split at runtime. AX211 physical speed, Wi-Fi menu operation, DHCP, IPv6,
 reconnect and sleep/wake still require one real-machine test. This mode cannot
 repair a radio/firmware/DMA bottleneck merely by using an Ethernet interface.
 AirDrop, WPA3-only and Watch unlock remain outside the implemented scope.
+
+The first physical test of 98babc6 loaded the hybrid driver, but produced no
+throughput measurement. The data interface took the known `en0` assignment
+before native Wi-Fi registered. InterfaceNamer then rejected native Wi-Fi's
+fixed `en0` name with `interface name en0 is unavailable`; Wi-Fi disappeared.
+The setup helper stopped before writing any IP preferences. Using a distinct
+data prefix repairs that naming conflict in the driver design. Registration,
+joining, DHCP and throughput after this repair still need physical verification.
+
+The prefix hook and separate unit namespaces are described by
+[Apple's getNamePrefix API](https://developer.apple.com/documentation/kernel/ionetworkinterface/1810563-getnameprefix)
+and implemented in
+[IONetworkStack](https://github.com/apple-oss-distributions/IONetworkingFamily/blob/main/IONetworkStack.cpp).

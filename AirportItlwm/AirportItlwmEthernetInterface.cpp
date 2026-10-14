@@ -307,6 +307,13 @@ IOReturn AirportItlwmDataController::updateAddress(const UInt8 *address, UInt32 
     dataInterface->setProperty(kIOMACAddress, const_cast<UInt8 *>(address), length);
     return kIOReturnSuccess;
 }
+const char *AirportItlwmDataInterface::getNamePrefix() const {
+    // InterfaceNamer remembers the physical MAC's fixed en0 assignment for
+    // native Wi-Fi. A second en* interface with that MAC can claim en0 first
+    // and prevent Wi-Fi BSD attachment. Reserve a separate unit namespace;
+    // leave both the MAC and native WCL registration sequence unchanged.
+    return "itl";
+}
 IOReturn AirportItlwmDataInterface::attachToDataLinkLayer(IOOptionBits options, void *parameter) {
     IOReturn status = IOEthernetInterface::attachToDataLinkLayer(options, parameter);
     auto controller = OSDynamicCast(AirportItlwmDataController, getController());
