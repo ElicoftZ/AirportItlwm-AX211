@@ -39,6 +39,8 @@ public:
     IOReturn getHardwareAddress(IOEthernetAddress *) override;
     IOReturn setMulticastMode(IOEnetMulticastMode) override;
     IOReturn setPromiscuousMode(IOEnetPromiscuousMode) override;
+    IOReturn setMulticastList(IOEthernetAddress *, UInt32) override;
+    IOReturn getPacketFilters(const OSSymbol *, UInt32 *) const override;
     UInt32 getFeatures() const override;
     const OSString *newVendorString() const override;
     const OSString *newModelString() const override;

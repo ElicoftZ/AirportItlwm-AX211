@@ -38,11 +38,11 @@ void AirportItlwm::releaseAll()
             ifp->control_iface = nullptr;
             ifp->iface = bsdInterface;
             auto stats = bsdInterface ? bsdInterface->getParameter(kIONetworkStatsKey) : nullptr;
-            ifp->netStat = stats ? static_cast<IONetworkStats *>(stats->getBuffer()) : nullptr;
+            ifp->netStat = stats ? const_cast<IONetworkStats *>(static_cast<const IONetworkStats *>(stats->getBuffer())) : nullptr;
             fpNetStats = ifp->netStat;
         }
         if (ethernetDataStarted) ethernetDataController->stop(this);
-        ethernetDataController->detach(this);
+        if (ethernetDataController->getProvider() == this) ethernetDataController->detach(this);
         OSSafeReleaseNULL(ethernetDataController);
         ethernetDataStarted = false;
     }
@@ -164,7 +164,7 @@ bool AirportItlwm::bindEthernetDataInterface(IONetworkInterface *interface)
     auto ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
     ifp->control_iface = bsdInterface;
     ifp->iface = ethernet;
-    ifp->netStat = static_cast<IONetworkStats *>(data->getBuffer());
+    ifp->netStat = const_cast<IONetworkStats *>(static_cast<const IONetworkStats *>(data->getBuffer()));
     fpNetStats = ifp->netStat;
     return true;
 }

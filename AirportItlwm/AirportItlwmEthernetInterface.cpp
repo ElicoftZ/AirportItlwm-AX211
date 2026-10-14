@@ -234,6 +234,10 @@ bool AirportItlwmDataController::start(IOService *provider) {
     if (published) setSelectedMedium(medium);
     medium->release(); media->release();
     if (!published || !attachInterface(&dataInterface, false)) {
+        if (dataInterface) {
+            detachInterface(dataInterface, true);
+            OSSafeReleaseNULL(dataInterface);
+        }
         IOEthernetController::stop(provider); return false;
     }
     setProperty("HybridEthernetDataController", true);
@@ -280,6 +284,8 @@ IOReturn AirportItlwmDataController::outputStart(IONetworkInterface *interface, 
 IOReturn AirportItlwmDataController::getHardwareAddress(IOEthernetAddress *address) { return owner->getHardwareAddress(address); }
 IOReturn AirportItlwmDataController::setMulticastMode(IOEnetMulticastMode mode) { return owner->setMulticastMode(mode); }
 IOReturn AirportItlwmDataController::setPromiscuousMode(IOEnetPromiscuousMode mode) { return owner->setPromiscuousMode(mode); }
+IOReturn AirportItlwmDataController::setMulticastList(IOEthernetAddress *addresses, UInt32 count) { return owner->setMulticastList(addresses, count); }
+IOReturn AirportItlwmDataController::getPacketFilters(const OSSymbol *group, UInt32 *filters) const { return owner->getPacketFilters(group, filters); }
 UInt32 AirportItlwmDataController::getFeatures() const { return owner->getFeatures(); }
 const OSString *AirportItlwmDataController::newVendorString() const { return OSString::withCString("Intel"); }
 const OSString *AirportItlwmDataController::newModelString() const { return OSString::withCString("Intel Wi-Fi Ethernet"); }
@@ -302,6 +308,9 @@ IOReturn AirportItlwmDataInterface::attachToDataLinkLayer(IOOptionBits options, 
     IOReturn status = IOEthernetInterface::attachToDataLinkLayer(options, parameter);
     auto controller = OSDynamicCast(AirportItlwmDataController, getController());
     if (status == kIOReturnSuccess && controller && controller->owner) {
+        IOEthernetAddress address;
+        if (controller->owner->getHardwareAddress(&address) == kIOReturnSuccess)
+            controller->updateAddress(address.bytes, sizeof(address.bytes));
         char name[IFNAMSIZ];
         snprintf(name, sizeof(name), "%s%u", ifnet_name(getIfnet()), ifnet_unit(getIfnet()));
         controller->owner->setProperty("HybridDataBSDName", name);

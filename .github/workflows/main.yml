@@ -78,6 +78,17 @@ jobs:
           configuration=$(printf '%s' "$CONFIGURATION" | tr '[:lower:]' '[:upper:]')
           suffix="v$version-$configuration-alpha-$short_sha"
           ditto -c -k --keepParent "$products/$PLATFORM/AirportItlwm.kext" "artifacts/AirportItlwm-$PLATFORM-$suffix.zip"
+      - name: Build and check reversible Ethernet service setup
+        run: |
+          clang -fobjc-arc -Wall -Wextra -mmacosx-version-min=15.0 \
+            -framework Foundation -framework SystemConfiguration -framework IOKit \
+            tools/hybrid-network.m -o artifacts/hybrid-network
+          artifacts/hybrid-network --self-test
+          codesign --force --sign - artifacts/hybrid-network
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hybrid-network-${{ matrix.configuration }}
+          path: artifacts/hybrid-network
       - uses: actions/upload-artifact@v4
         with:
           name: AirportItlwm-${{ matrix.platform }}-${{ matrix.configuration }}
