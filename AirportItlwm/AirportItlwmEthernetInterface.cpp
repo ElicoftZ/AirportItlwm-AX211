@@ -247,6 +247,7 @@ bool AirportItlwmDataController::start(IOService *provider) {
     return true;
 }
 void AirportItlwmDataController::stop(IOService *provider) {
+    dataEnabled = false;
     if (dataInterface) {
 #ifdef __PRIVATE_SPI__
         dataInterface->stopOutputThread(); dataInterface->flushOutputQueue();
@@ -262,12 +263,14 @@ bool AirportItlwmDataController::configureInterface(IONetworkInterface *interfac
 IOReturn AirportItlwmDataController::enable(IONetworkInterface *) {
     // Native WCL owns radio power and association. An Ethernet service must
     // not reset firmware or change the network when DHCP opens the interface.
+    dataEnabled = true;
 #ifdef __PRIVATE_SPI__
     if (linkUp && dataInterface) dataInterface->startOutputThread();
 #endif
     return kIOReturnSuccess;
 }
 IOReturn AirportItlwmDataController::disable(IONetworkInterface *interface) {
+    dataEnabled = false;
 #ifdef __PRIVATE_SPI__
     interface->stopOutputThread(); interface->flushOutputQueue();
 #endif
@@ -294,7 +297,7 @@ void AirportItlwmDataController::updateCarrier(bool active) {
     linkUp = active;
     setLinkStatus(kIONetworkLinkValid | (active ? kIONetworkLinkActive : 0));
 #ifdef __PRIVATE_SPI__
-    if (active) dataInterface->startOutputThread();
+    if (active && dataEnabled) dataInterface->startOutputThread();
     else { dataInterface->stopOutputThread(); dataInterface->flushOutputQueue(); }
 #endif
 }

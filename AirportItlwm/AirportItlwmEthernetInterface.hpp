@@ -49,6 +49,7 @@ public:
     AirportItlwm *owner = nullptr;
     IONetworkInterface *dataInterface = nullptr;
     bool linkUp = false;
+    bool dataEnabled = false;
 };
 class AirportItlwmDataInterface : public IOEthernetInterface {
     OSDeclareDefaultStructors(AirportItlwmDataInterface)
