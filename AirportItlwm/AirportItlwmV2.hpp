@@ -121,6 +121,12 @@ public:
     static void eventHandler(struct ieee80211com *, int, void *);
 #ifdef AIRPORT_WCL
     static IOReturn observeAWDLGated(OSObject *, void *, void *, void *, void *);
+    void publishPacketDiagnostics();
+    bool packetDiagnosticsEnabled = false;
+    uint64_t wclScanRequests = 0;
+    uint64_t wclFastScanRequests = 0;
+    uint64_t wclHardwareScanAttempts = 0;
+    uint64_t wclSuccessfulScans = 0;
     AirportAWDL::PeerTable awdlObservedPeers;
     uint64_t awdlObservedFrames = 0;
     uint64_t awdlObservedMalformed = 0;

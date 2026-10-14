@@ -126,11 +126,44 @@ void AirportItlwm::watchdogAction(IOTimerEventSource *timer)
 {
     struct _ifnet *ifp = &fHalService->get80211Controller()->ic_ac.ac_if;
     (*ifp->if_watchdog)(ifp);
+#ifdef AIRPORT_WCL
+    publishPacketDiagnostics();
+#endif
 
     watchdogTimer->setTimeoutMS(kWatchDogTimerPeriod);
 }
 
 #ifdef AIRPORT_WCL
+void AirportItlwm::publishPacketDiagnostics()
+{
+    // The watchdog already runs on the driver workloop. Keep allocations and
+    // publication out of the per-packet path, and enable only for diagnosis.
+    if (!packetDiagnosticsEnabled || !fHalService)
+        return;
+    auto ic = fHalService->get80211Controller();
+    auto ifp = &ic->ic_ac.ac_if;
+    if (!ifp->netStat)
+        return;
+    uint64_t timestampNS = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &timestampNS);
+    setProperty("PacketDiagnosticsTimestampMS", timestampNS / 1000000, 64);
+    setProperty("DriverInputPackets", ifp->netStat->inputPackets, 64);
+    setProperty("DriverInputErrors", ifp->netStat->inputErrors, 64);
+    setProperty("DriverOutputPackets", ifp->netStat->outputPackets, 64);
+    setProperty("DriverOutputErrors", ifp->netStat->outputErrors, 64);
+    setProperty("RxBAAgreements", ic->ic_stats.is_ht_rx_ba_agreements, 32);
+    setProperty("RxBASessionTimeouts", ic->ic_stats.is_ht_rx_ba_timeout, 32);
+    setProperty("RxBAGapTimeouts", ic->ic_stats.is_ht_rx_ba_window_gap_timeout, 32);
+    setProperty("RxBABufferDrops", ic->ic_stats.is_ht_rx_ba_no_buf, 32);
+    setProperty("RxBAOldFrameDrops", ic->ic_stats.is_ht_rx_frame_below_ba_winstart, 32);
+    setProperty("RxCCMPDecryptErrors", ic->ic_stats.is_ccmp_dec_errs, 32);
+    setProperty("RxCCMPReplays", ic->ic_stats.is_ccmp_replays, 32);
+    setProperty("WCLScanRequests", wclScanRequests, 64);
+    setProperty("WCLFastScanRequests", wclFastScanRequests, 64);
+    setProperty("WCLHardwareScanAttempts", wclHardwareScanAttempts, 64);
+    setProperty("WCLSuccessfulScans", wclSuccessfulScans, 64);
+}
+
 IOReturn AirportItlwm::observeAWDLGated(OSObject *owner, void *arg,
                                       void *, void *, void *)
 {
@@ -363,6 +396,9 @@ bool AirportItlwm::start(IOService *provider)
     bool observing = PE_parse_boot_argn("awdl_observe", &awdl_observe, sizeof(awdl_observe)) && awdl_observe == 1;
     fHalService->get80211Controller()->ic_wcl_awdl_observe = observing;
     setProperty("AWDLObservationEnabled", observing);
+    int packet_diag = 0;
+    packetDiagnosticsEnabled = PE_parse_boot_argn("itlwm_diag", &packet_diag, sizeof(packet_diag)) && packet_diag == 1;
+    setProperty("PacketDiagnosticsEnabled", packetDiagnosticsEnabled);
 #endif
 
     if (PE_parse_boot_argn("-novht", &boot_value, sizeof(boot_value)))

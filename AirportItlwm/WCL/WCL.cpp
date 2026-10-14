@@ -239,6 +239,9 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
     AirportWCL::ScanRequest scan;
     if (!AirportWCL::decodeScan(request, 0x1550, scan))
         return kIOReturnBadArgument;
+    ++instance->wclScanRequests;
+    if (scan.type == APPLE80211_SCAN_TYPE_FAST)
+        ++instance->wclFastScanRequests;
     ieee80211com *ic = fHalService->get80211Controller();
     if (!(ic->ic_if.if_flags & IFF_RUNNING))
         return kIOReturnNotReady;
@@ -268,6 +271,7 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
     memcpy(ic->ic_wcl_scan_channels, scan.channels, sizeof(scan.channels));
     scanSource->setTimeoutMS(20000);
     if (ic->ic_state == IEEE80211_S_RUN) {
+        ++instance->wclHardwareScanAttempts;
         ieee80211_begin_cache_bgscan(&ic->ic_if);
         if (!(ic->ic_flags & IEEE80211_F_BGSCAN)) {
             scanPending = false;
@@ -276,6 +280,7 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *reque
             return kIOReturnBusy;
         }
     } else if (ic->ic_state != IEEE80211_S_SCAN) {
+        ++instance->wclHardwareScanAttempts;
         int error = ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
         if (error) {
             scanPending = false;
@@ -291,6 +296,8 @@ void AirportItlwmSkywalkInterface::finishWCLScan(IOReturn status)
 {
     if (!scanPending)
         return;
+    if (status == kIOReturnSuccess)
+        ++instance->wclSuccessfulScans;
     scanPending = false;
     scanCompleted = false;
     scanSource->cancelTimeout();

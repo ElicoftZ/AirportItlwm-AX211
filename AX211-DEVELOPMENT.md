@@ -40,9 +40,10 @@ EFI and working USB are retained independently of experimental releases.
 ## RX throughput investigation
 
 The supplied macOS diagnostics show WPA2-Personal, 802.11ac, channel 44 at
-80 MHz, two spatial streams, a 585 Mbps TX PHY rate and -62 dBm RSSI. No
-completed throughput test was supplied; this does not establish an RX rate
-or the cause of slow downloads. No EFI changes are made by building this code.
+80 MHz, two spatial streams, a 585 Mbps TX PHY rate and -62 dBm RSSI. A later
+networkQuality result after the timer build still shows severe low throughput.
+The timer repairs have not established a working speed fix. A PHY rate does
+not establish the RX rate or the cause. Building does not change the EFI.
 
 The AX211 iwx receive path now recreates both BlockAck timers after teardown:
 `iwx_clear_reorder_buffer` frees the timer objects, while previously the next
@@ -69,6 +70,12 @@ Debug and Release Sequoia builds are also required before publication.
 Upstream also reports that frequent Airport-requested scanning can reduce
 throughput. The current firmware already has home/away scan timing controls;
 this change does not suppress scans or claim that scanning explains this PC.
+
+Opt-in `itlwm_diag=1` publishes packet-error, BlockAck, CCMP and native scan
+counters to IORegistry once per watchdog interval (one second). Publication
+does not run in the packet path and is disabled by default. Scan-attempt
+counts reflect calls requesting firmware work, not confirmed radio scans.
+These measurements are intended to identify stalls; they are not a speed fix.
 
 References:
 - [Upstream slow-throughput discussion](https://github.com/OpenIntelWireless/itlwm/issues/621)
