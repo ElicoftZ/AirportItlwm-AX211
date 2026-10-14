@@ -5,6 +5,9 @@
 
 This fork builds Sequoia Debug and Release kexts, hardens AWDL sync-template
 handling, and adds a tested, opt-in AWDL receive observer (`awdl_observe=1`).
+The iwx receive path also repairs BlockAck timer teardown/restart and gap
+deadline handling, with host regression checks and macOS builds. A throughput
+improvement on physical AX211 hardware has not yet been established.
 The observer tracks bounded peer/frame counts from packets already delivered
 by the firmware. It does not transmit AWDL or advertise a working AirDrop link.
 

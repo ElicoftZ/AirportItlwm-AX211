@@ -37,6 +37,44 @@ No working AirDrop, WPA3-only or Watch-unlock claim is made. A passing build
 does not qualify these features or the physical adapter. The installed SSD
 EFI and working USB are retained independently of experimental releases.
 
+## RX throughput investigation
+
+The supplied macOS diagnostics show WPA2-Personal, 802.11ac, channel 44 at
+80 MHz, two spatial streams, a 585 Mbps TX PHY rate and -62 dBm RSSI. No
+completed throughput test was supplied; this does not establish an RX rate
+or the cause of slow downloads. No EFI changes are made by building this code.
+
+The AX211 iwx receive path now recreates both BlockAck timers after teardown:
+`iwx_clear_reorder_buffer` frees the timer objects, while previously the next
+session tried to schedule the null objects. This also affects adapter stop
+and restart. A missing gap timer can strand packets behind a sequence gap.
+
+An existing gap timer is preserved while later MPDUs arrive. If its callback
+finds a newer unexpired frame, it schedules only that frame's remaining
+lifetime, rounded up to milliseconds. A-MSDU subframes retain the first
+arrival time. The expiry scan wraps sequence numbers at 4096 before buffer
+indexing, including non-power-of-two negotiated windows.
+
+Session inactivity uses the peer's negotiated BlockAck timeout rather than
+the separate fixed 100 ms reorder timeout. Zero remains disabled. Many APs
+negotiate zero, so the inactivity repair is not a universal speed fix.
+
+CI runs both helper tests and the actual timer/init/clear/release methods in
+a host fixture with fake clocks, timers and packet delivery. The fixture
+tests repeated arrivals across a missing sequence, remaining deadlines,
+A-MSDU release flags, sequence wrap and multiple teardown/restart cycles.
+These checks do not exercise the Intel firmware, native packet stack or RF.
+Debug and Release Sequoia builds are also required before publication.
+
+Upstream also reports that frequent Airport-requested scanning can reduce
+throughput. The current firmware already has home/away scan timing controls;
+this change does not suppress scans or claim that scanning explains this PC.
+
+References:
+- [Upstream slow-throughput discussion](https://github.com/OpenIntelWireless/itlwm/issues/621)
+- [Linux negotiated BA inactivity handling](https://github.com/torvalds/linux/blob/master/net/mac80211/agg-rx.c)
+- [Apple packet delivery and output scheduling](https://github.com/apple-oss-distributions/IONetworkingFamily/blob/main/IONetworkInterface.cpp)
+
 Protocol reference: https://github.com/seemoo-lab/owl/blob/master/src/frame.h
 Only public wire-format facts were used; GPL-3 OWL implementation code was
 not imported into this GPL-2 fork.

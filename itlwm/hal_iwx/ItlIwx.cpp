@@ -131,6 +131,8 @@ OSDefineMetaClassAndStructors(ItlIwx, ItlHalService)
 
 #define IC2IFP(_ic_) (&(_ic_)->ic_if)
 
+#include "RxTiming.hpp"
+
 #define IWX_DEBUG
 
 #ifdef IWX_DEBUG
@@ -4024,6 +4026,13 @@ iwx_init_reorder_buffer(struct iwx_reorder_buffer *reorder_buf,
     reorder_buf->consec_oldsn_drops = 0;
     reorder_buf->consec_oldsn_ampdu_gp2 = 0;
     reorder_buf->consec_oldsn_prev_drop = 0;
+    // Normal BA teardown and adapter stop free these objects. Recreate them
+    // before a new session; timeout_add_* cannot schedule a null CTimeout.
+    struct iwx_rxba_data *rxba = iwx_rxba_data_from_reorder_buf(reorder_buf);
+    if (!timeout_initialized(&reorder_buf->reorder_timer))
+        timeout_set(&reorder_buf->reorder_timer, iwx_reorder_timer_expired, reorder_buf);
+    if (!timeout_initialized(&rxba->session_timer))
+        timeout_set(&rxba->session_timer, iwx_rx_ba_session_expired, rxba);
 }
 
 void ItlIwx::
@@ -4050,6 +4059,12 @@ iwx_clear_reorder_buffer(struct iwx_softc *sc, struct iwx_rxba_data *rxba)
 
 #define RX_REORDER_BUF_TIMEOUT_MQ_USEC (100000ULL)
 
+static uint64_t
+iwx_uptime_usec(const struct timeval &time)
+{
+    return uint64_t(time.tv_sec) * 1000000ULL + uint64_t(time.tv_usec);
+}
+
 void ItlIwx::
 iwx_rx_ba_session_expired(void *arg)
 {
@@ -4058,7 +4073,7 @@ iwx_rx_ba_session_expired(void *arg)
     struct iwx_softc *sc = rxba->sc;
     struct ieee80211com *ic = &sc->sc_ic;
     struct ieee80211_node *ni = ic->ic_bss;
-    struct timeval now, timeout, expiry;
+    struct timeval now;
     int s;
     
     s = splnet();
@@ -4066,10 +4081,12 @@ iwx_rx_ba_session_expired(void *arg)
         ic->ic_state == IEEE80211_S_RUN &&
         rxba->baid != IWX_RX_REORDER_DATA_INVALID_BAID) {
         getmicrouptime(&now);
-        USEC_TO_TIMEVAL(RX_REORDER_BUF_TIMEOUT_MQ_USEC, &timeout);
-        timeradd(&rxba->last_rx, &timeout, &expiry);
-        if (timercmp(&now, &expiry, <)) {
-            timeout_add_usec(&rxba->session_timer, rxba->timeout);
+        const auto deadline = IwxRxTiming::planDeadline(
+            iwx_uptime_usec(now), iwx_uptime_usec(rxba->last_rx), rxba->timeout);
+        if (!deadline.enabled) {
+            timeout_del(&rxba->session_timer);
+        } else if (!deadline.expired) {
+            timeout_add_msec(&rxba->session_timer, deadline.milliseconds);
         } else {
             ic->ic_stats.is_ht_rx_ba_timeout++;
             ieee80211_delba_request(ic, ni,
@@ -4105,7 +4122,7 @@ iwx_reorder_timer_expired(void *arg)
     USEC_TO_TIMEVAL(RX_REORDER_BUF_TIMEOUT_MQ_USEC, &timeout);
     
     for (i = 0; i < buf->buf_size ; i++) {
-        index = (buf->head_sn + i) % buf->buf_size;
+        index = IwxRxTiming::sequenceAt(buf->head_sn, i) % buf->buf_size;
         
         if (ml_empty(&entries[index].frames)) {
             /*
@@ -4136,8 +4153,14 @@ iwx_reorder_timer_expired(void *arg)
          * pointing to the first unexpired frame - modify reorder timeout
          * accordingly.
          */
-        timeout_add_usec(&buf->reorder_timer,
-                         RX_REORDER_BUF_TIMEOUT_MQ_USEC);
+        unsigned delayMS = RX_REORDER_BUF_TIMEOUT_MQ_USEC / 1000;
+        if (i < buf->buf_size) {
+            const auto deadline = IwxRxTiming::planDeadline(
+                iwx_uptime_usec(now), iwx_uptime_usec(entries[index].reorder_time),
+                RX_REORDER_BUF_TIMEOUT_MQ_USEC);
+            delayMS = deadline.expired ? 1 : deadline.milliseconds;
+        }
+        timeout_add_msec(&buf->reorder_timer, delayMS);
     }
     
     splx(s);
@@ -5555,10 +5578,11 @@ iwx_release_frames(struct iwx_softc *sc, struct ieee80211_node *ni,
     reorder_buf->head_sn = nssn;
 
 set_timer:
-    if (reorder_buf->num_stored && !reorder_buf->removed) {
+    if (IwxRxTiming::armGapTimer(reorder_buf->num_stored != 0,
+            reorder_buf->removed != 0, timeout_pending(&reorder_buf->reorder_timer)))
         timeout_add_usec(&reorder_buf->reorder_timer,
             RX_REORDER_BUF_TIMEOUT_MQ_USEC);
-    } else
+    else if (!reorder_buf->num_stored || reorder_buf->removed)
         timeout_del(&reorder_buf->reorder_timer);
 }
 
@@ -5772,6 +5796,7 @@ iwx_rx_reorder(struct iwx_softc *sc, mbuf_t m, int chanidx,
         }
     } else {
         /* This data is the same for all A-MSDU subframes. */
+        getmicrouptime(&entries[index].reorder_time);
         entries[index].chanidx = chanidx;
         entries[index].is_shortpre = is_shortpre;
         entries[index].rate_n_flags = rate_n_flags;
@@ -5782,7 +5807,6 @@ iwx_rx_reorder(struct iwx_softc *sc, mbuf_t m, int chanidx,
     /* put in reorder buffer */
     ml_enqueue(&entries[index].frames, m);
     buffer->num_stored++;
-    getmicrouptime(&entries[index].reorder_time);
 
     if (is_amsdu) {
         buffer->last_amsdu = sn;
