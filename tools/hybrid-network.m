@@ -2,6 +2,8 @@
 #import <Foundation/Foundation.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #import <IOKit/IOKitLib.h>
+#include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 static void require(BOOL valid, NSString *message) {
@@ -69,6 +71,8 @@ static void disableControlIP(SCNetworkServiceRef service) {
     }
 }
 static void restoreBackup(SCPreferencesRef prefs, NSDictionary *backup) {
+    SCNetworkSetRef set = SCNetworkSetCopy(prefs, (__bridge CFStringRef)backup[@"SetID"]);
+    require(set != NULL, @"Saved network location is missing");
     for (NSDictionary *record in backup[@"Services"]) {
         SCNetworkServiceRef service = SCNetworkServiceCopy(prefs, (__bridge CFStringRef)record[@"ID"]);
         require(service != NULL, @"Saved network service is missing; refusing partial restore");
@@ -79,11 +83,18 @@ static void restoreBackup(SCPreferencesRef prefs, NSDictionary *backup) {
         SCNetworkServiceRef service = SCNetworkServiceCopy(prefs, (__bridge CFStringRef)created);
         if (service) {
             require([bsdName(service) isEqualToString:backup[@"DataBSDName"]], @"Created service identity changed");
+            CFArrayRef services = SCNetworkSetCopyServices(set);
+            for (id value in (__bridge NSArray *)services) {
+                SCNetworkServiceRef member = (__bridge SCNetworkServiceRef)value;
+                if (CFEqual(SCNetworkServiceGetServiceID(member), (__bridge CFStringRef)created)) {
+                    require(SCNetworkSetRemoveService(set, service), @"Remove created service from location failed");
+                    break;
+                }
+            }
+            if (services) CFRelease(services);
             require(SCNetworkServiceRemove(service), @"Remove created data service failed"); CFRelease(service);
         }
     }
-    SCNetworkSetRef set = SCNetworkSetCopy(prefs, (__bridge CFStringRef)backup[@"SetID"]);
-    require(set != NULL, @"Saved network location is missing");
     require(SCNetworkSetSetServiceOrder(set, (__bridge CFArrayRef)backup[@"Order"]), @"Restore service order failed");
     CFRelease(set);
 }
@@ -113,16 +124,38 @@ static int selfTest(void) {
     SCNetworkServiceRef service = SCNetworkServiceCreate(prefs, ethernet);
     require(service != NULL, @"Fixture service failed");
     require(SCNetworkServiceEstablishDefaultConfiguration(service), @"Fixture defaults failed");
+    SCNetworkSetRef set = SCNetworkSetCreate(prefs);
+    require(set && SCNetworkSetAddService(set, service), @"Fixture location failed");
+    NSString *identifier = (__bridge NSString *)SCNetworkServiceGetServiceID(service);
+    require(SCNetworkSetSetServiceOrder(set, (__bridge CFArrayRef)@[identifier]), @"Fixture service order failed");
     NSDictionary *before = snapshot(service);
+    NSDictionary *backup = @{@"Services": @[before], @"CreatedDataService": @"",
+        @"SetID": (__bridge NSString *)SCNetworkSetGetSetID(set), @"Order": @[identifier]};
     disableControlIP(service);
     NSDictionary *disabled = snapshot(service);
     require(![disabled[@"IPv4"][@"Enabled"] boolValue] && ![disabled[@"IPv6"][@"Enabled"] boolValue], @"IP disable fixture failed");
     configureData(service);
     NSDictionary *configured = snapshot(service);
     require([configured[@"IPv4"][@"Config"][@"ConfigMethod"] isEqual:@"DHCP"], @"DHCP fixture failed");
-    restoreService(service, before);
+    restoreBackup(prefs, backup);
     require([snapshot(service) isEqual:before], @"Configuration roundtrip failed");
-    CFRelease(service); CFRelease(interfaces); CFRelease(prefs);
+    require([(__bridge NSArray *)SCNetworkSetGetServiceOrder(set) isEqual:@[identifier]], @"Service order roundtrip failed");
+    // Exercise restoration when the helper created a data service. This fixture
+    // has a separate empty location and is still never committed/applied.
+    require(SCNetworkSetRemoveService(set, service) && SCNetworkServiceRemove(service), @"Fixture service cleanup failed");
+    CFRelease(service);
+    service = SCNetworkServiceCreate(prefs, ethernet);
+    require(service && SCNetworkServiceEstablishDefaultConfiguration(service) && SCNetworkSetAddService(set, service), @"Created-service fixture failed");
+    identifier = (__bridge NSString *)SCNetworkServiceGetServiceID(service);
+    backup = @{@"Services": @[], @"CreatedDataService": identifier,
+        @"DataBSDName": bsdName(service), @"SetID": (__bridge NSString *)SCNetworkSetGetSetID(set), @"Order": @[]};
+    restoreBackup(prefs, backup);
+    SCNetworkServiceRef removed = SCNetworkServiceCopy(prefs, (__bridge CFStringRef)identifier);
+    require(removed == NULL, @"Created service was not removed");
+    CFArrayRef remaining = SCNetworkSetCopyServices(set);
+    require(remaining && CFArrayGetCount(remaining) == 0, @"Created-service location membership was not removed");
+    CFRelease(remaining);
+    CFRelease(service); CFRelease(set); CFRelease(interfaces); CFRelease(prefs);
     puts("network configuration roundtrip passed; no preferences committed/applied"); return 0;
 }
 int main(int argc, const char **argv) { @autoreleasepool {

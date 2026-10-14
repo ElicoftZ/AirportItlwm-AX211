@@ -212,7 +212,7 @@ OSDefineMetaClassAndStructors(AirportItlwmDataInterface, IOEthernetInterface);
 
 bool AirportItlwmDataController::initWithOwner(AirportItlwm *airport) {
     owner = airport;
-    return owner && IOEthernetController::init();
+    return owner && IOEthernetController::init(nullptr);
 }
 bool AirportItlwmDataController::createWorkLoop() { return owner && owner->getWorkLoop(); }
 IOWorkLoop *AirportItlwmDataController::getWorkLoop() const { return owner ? owner->getWorkLoop() : nullptr; }
