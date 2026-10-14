@@ -15,12 +15,14 @@ static NSString *bsdName(SCNetworkServiceRef service) {
 }
 static NSDictionary *snapshot(SCNetworkServiceRef service) {
     NSMutableDictionary *record = [@{@"ID": (__bridge NSString *)SCNetworkServiceGetServiceID(service),
+        @"BSDName": bsdName(service) ?: @"",
         @"Enabled": @(SCNetworkServiceGetEnabled(service))} mutableCopy];
     for (NSString *type in @[@"IPv4", @"IPv6"]) {
         SCNetworkProtocolRef protocol = SCNetworkServiceCopyProtocol(service, (__bridge CFStringRef)type);
         if (protocol) {
             CFDictionaryRef config = SCNetworkProtocolGetConfiguration(protocol);
             record[type] = @{@"Present": @YES, @"Enabled": @(SCNetworkProtocolGetEnabled(protocol)),
+                @"HadConfiguration": @(config != NULL),
                 @"Config": config ? [(__bridge NSDictionary *)config copy] : @{}};
             CFRelease(protocol);
         } else record[type] = @{@"Present": @NO};
@@ -39,7 +41,8 @@ static void restoreService(SCNetworkServiceRef service, NSDictionary *record) {
                 protocol = SCNetworkServiceCopyProtocol(service, (__bridge CFStringRef)type);
             }
             require(protocol != NULL, @"IP protocol unavailable");
-            require(SCNetworkProtocolSetConfiguration(protocol, (__bridge CFDictionaryRef)saved[@"Config"]), @"Restore IP configuration failed");
+            CFDictionaryRef configuration = [saved[@"HadConfiguration"] boolValue] ? (__bridge CFDictionaryRef)saved[@"Config"] : NULL;
+            require(SCNetworkProtocolSetConfiguration(protocol, configuration), @"Restore IP configuration failed");
             require(SCNetworkProtocolSetEnabled(protocol, [saved[@"Enabled"] boolValue]), @"Restore IP enabled state failed");
         }
         if (protocol) CFRelease(protocol);
@@ -71,14 +74,35 @@ static void disableControlIP(SCNetworkServiceRef service) {
     }
 }
 static void restoreBackup(SCPreferencesRef prefs, NSDictionary *backup) {
+    require([backup[@"Services"] isKindOfClass:[NSArray class]] &&
+            [backup[@"SetID"] isKindOfClass:[NSString class]] &&
+            [backup[@"Order"] isKindOfClass:[NSArray class]], @"Invalid network backup structure");
     SCNetworkSetRef set = SCNetworkSetCopy(prefs, (__bridge CFStringRef)backup[@"SetID"]);
     require(set != NULL, @"Saved network location is missing");
+    // Validate every saved identity before staging restoration of any service.
+    for (NSDictionary *record in backup[@"Services"]) {
+        require([record[@"ID"] isKindOfClass:[NSString class]] &&
+                [record[@"BSDName"] isKindOfClass:[NSString class]], @"Invalid saved service identity");
+        SCNetworkServiceRef service = SCNetworkServiceCopy(prefs, (__bridge CFStringRef)record[@"ID"]);
+        require(service != NULL, @"Saved network service is missing; refusing partial restore");
+        BOOL matches = [bsdName(service) isEqualToString:record[@"BSDName"]];
+        CFRelease(service);
+        require(matches, @"Saved service interface identity changed; refusing restore");
+    }
+    NSString *created = backup[@"CreatedDataService"];
+    if (created.length) {
+        SCNetworkServiceRef service = SCNetworkServiceCopy(prefs, (__bridge CFStringRef)created);
+        if (service) {
+            BOOL matches = [bsdName(service) isEqualToString:backup[@"DataBSDName"]];
+            CFRelease(service);
+            require(matches, @"Created service identity changed");
+        }
+    }
     for (NSDictionary *record in backup[@"Services"]) {
         SCNetworkServiceRef service = SCNetworkServiceCopy(prefs, (__bridge CFStringRef)record[@"ID"]);
         require(service != NULL, @"Saved network service is missing; refusing partial restore");
         restoreService(service, record); CFRelease(service);
     }
-    NSString *created = backup[@"CreatedDataService"];
     if (created.length) {
         SCNetworkServiceRef service = SCNetworkServiceCopy(prefs, (__bridge CFStringRef)created);
         if (service) {
@@ -140,6 +164,11 @@ static int selfTest(void) {
     restoreBackup(prefs, backup);
     require([snapshot(service) isEqual:before], @"Configuration roundtrip failed");
     require([(__bridge NSArray *)SCNetworkSetGetServiceOrder(set) isEqual:@[identifier]], @"Service order roundtrip failed");
+    require(SCNetworkServiceRemoveProtocolType(service, kSCNetworkProtocolTypeIPv6), @"Absent-protocol fixture failed");
+    NSDictionary *absent = snapshot(service);
+    configureData(service);
+    restoreService(service, absent);
+    require([snapshot(service) isEqual:absent], @"Absent IP protocol roundtrip failed");
     // Exercise restoration when the helper created a data service. This fixture
     // has a separate empty location and is still never committed/applied.
     require(SCNetworkSetRemoveService(set, service) && SCNetworkServiceRemove(service), @"Fixture service cleanup failed");
@@ -223,7 +252,9 @@ int main(int argc, const char **argv) { @autoreleasepool {
             require(SCPreferencesCommitChanges(prefs), @"Commit failed; backup retained");
             if (!SCPreferencesApplyChanges(prefs)) {
                 restoreBackup(prefs, backup);
-                SCPreferencesCommitChanges(prefs); SCPreferencesApplyChanges(prefs);
+                BOOL committed = SCPreferencesCommitChanges(prefs);
+                BOOL applied = committed && SCPreferencesApplyChanges(prefs);
+                require(applied, [NSString stringWithFormat:@"Apply and automatic restore failed. Backup retained at %@; run --restore with that file.", path]);
                 require(NO, @"Apply failed; previous settings restored");
             }
             printf("Native Wi-Fi control: %s; Ethernet IP traffic: %s\n", controlName.UTF8String, dataName.UTF8String);
