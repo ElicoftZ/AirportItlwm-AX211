@@ -81,6 +81,7 @@ jobs:
       - name: Build and check reversible Ethernet service setup
         run: |
           bash -n tools/hybrid-setup.sh tools/hybrid-restore.sh
+          bash tools/hybrid-setup.sh --self-test
           clang -fobjc-arc -Wall -Wextra -mmacosx-version-min=15.0 \
             -framework Foundation -framework SystemConfiguration -framework IOKit \
             tools/hybrid-network.m -o artifacts/hybrid-network

@@ -64,14 +64,27 @@ static void configureData(SCNetworkServiceRef service) {
     }
     require(SCNetworkServiceSetEnabled(service, true), @"Enable data service failed");
 }
-static void disableControlIP(SCNetworkServiceRef service) {
-    for (NSString *type in @[@"IPv4", @"IPv6"]) {
+static void configureControl(SCNetworkServiceRef service) {
+    // airportd turns radio power off when configd brings the control ifnet
+    // down. Keep a local-only IPv4 protocol active, with no DHCP/default route.
+    SCNetworkProtocolRef ipv4 = SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeIPv4);
+    if (!ipv4) {
+        require(SCNetworkServiceAddProtocolType(service, kSCNetworkProtocolTypeIPv4), @"Add control IPv4 failed");
+        ipv4 = SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeIPv4);
+    }
+    require(ipv4 != NULL, @"Control IPv4 unavailable");
+    NSDictionary *config = @{@"ConfigMethod": @"LinkLocal"};
+    require(SCNetworkProtocolSetConfiguration(ipv4, (__bridge CFDictionaryRef)config) &&
+            SCNetworkProtocolSetEnabled(ipv4, true), @"Keep Wi-Fi control interface active failed");
+    CFRelease(ipv4);
+    for (NSString *type in @[@"IPv6"]) {
         SCNetworkProtocolRef protocol = SCNetworkServiceCopyProtocol(service, (__bridge CFStringRef)type);
         if (protocol) {
             require(SCNetworkProtocolSetEnabled(protocol, false), @"Disable control IP failed");
             CFRelease(protocol);
         }
     }
+    require(SCNetworkServiceSetEnabled(service, true), @"Enable control service failed");
 }
 static void restoreBackup(SCPreferencesRef prefs, NSDictionary *backup) {
     require([backup[@"Services"] isKindOfClass:[NSArray class]] &&
@@ -159,9 +172,15 @@ static int selfTest(void) {
     NSDictionary *before = snapshot(service);
     NSDictionary *backup = @{@"Services": @[before], @"CreatedDataService": @"",
         @"SetID": (__bridge NSString *)SCNetworkSetGetSetID(set), @"Order": @[identifier]};
-    disableControlIP(service);
+    configureControl(service);
     NSDictionary *disabled = snapshot(service);
-    require(![disabled[@"IPv4"][@"Enabled"] boolValue] && ![disabled[@"IPv6"][@"Enabled"] boolValue], @"IP disable fixture failed");
+    require([disabled[@"IPv4"][@"Enabled"] boolValue] && ![disabled[@"IPv6"][@"Enabled"] boolValue] &&
+            [disabled[@"IPv4"][@"Config"][@"ConfigMethod"] isEqual:@"LinkLocal"], @"Local-only control fixture failed");
+    SCNetworkProtocolRef oldIPv4 = SCNetworkServiceCopyProtocol(service, kSCNetworkProtocolTypeIPv4);
+    require(oldIPv4 && SCNetworkProtocolSetEnabled(oldIPv4, false), @"Old disabled-control fixture failed");
+    CFRelease(oldIPv4);
+    configureControl(service);
+    require([snapshot(service)[@"IPv4"][@"Enabled"] boolValue], @"Repair disabled-control fixture failed");
     configureData(service);
     NSDictionary *configured = snapshot(service);
     require([configured[@"IPv4"][@"Config"][@"ConfigMethod"] isEqual:@"DHCP"], @"DHCP fixture failed");
@@ -197,8 +216,8 @@ int main(int argc, const char **argv) { @autoreleasepool {
     SCPreferencesRef prefs = NULL; BOOL locked = NO;
     @try {
         if (argc == 2 && strcmp(argv[1], "--self-test") == 0) return selfTest();
-        require(argc == 3 && (strcmp(argv[1], "--apply") == 0 || strcmp(argv[1], "--restore") == 0),
-            @"Usage: sudo hybrid-network --apply|--restore /path/to/backup.plist");
+        require(argc == 3 && (strcmp(argv[1], "--apply") == 0 || strcmp(argv[1], "--repair") == 0 || strcmp(argv[1], "--restore") == 0),
+            @"Usage: sudo hybrid-network --apply|--repair|--restore /path/to/backup.plist");
         require(geteuid() == 0, @"Run with sudo to configure network services");
         NSString *path = [NSString stringWithUTF8String:argv[2]];
         prefs = SCPreferencesCreate(NULL, CFSTR("AirportItlwm hybrid"), NULL);
@@ -211,7 +230,10 @@ int main(int argc, const char **argv) { @autoreleasepool {
             require(SCPreferencesCommitChanges(prefs) && SCPreferencesApplyChanges(prefs), @"Restoring preferences failed");
             puts("Previous IP protocol settings and service order restored. Backup retained.");
         } else {
-            require(![[NSFileManager defaultManager] fileExistsAtPath:path], @"Backup already exists; restore it before another apply");
+            BOOL repairing = strcmp(argv[1], "--repair") == 0;
+            NSDictionary *originalBackup = repairing ? [NSDictionary dictionaryWithContentsOfFile:path] : nil;
+            if (repairing) require([originalBackup[@"Format"] isEqual:@1], @"Original backup missing or invalid; cannot repair");
+            else require(![[NSFileManager defaultManager] fileExistsAtPath:path], @"Backup already exists; use --repair or restore it before another apply");
             io_service_t driver = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AirportItlwm"));
             require(driver != IO_OBJECT_NULL, @"AirportItlwm driver not found");
             CFTypeRef mode = IORegistryEntryCreateCFProperty(driver, CFSTR("HybridEthernetMode"), NULL, 0);
@@ -225,6 +247,10 @@ int main(int argc, const char **argv) { @autoreleasepool {
             require(interface && CFEqual(SCNetworkInterfaceGetInterfaceType(interface), kSCNetworkInterfaceTypeEthernet), @"Data interface is not ordinary Ethernet");
             SCNetworkSetRef set = SCNetworkSetCopyCurrent(prefs);
             require(set != NULL, @"Current network location unavailable");
+            if (repairing) {
+                require([originalBackup[@"ControlBSDName"] isEqual:controlName] && [originalBackup[@"DataBSDName"] isEqual:dataName] &&
+                        [originalBackup[@"SetID"] isEqual:(__bridge NSString *)SCNetworkSetGetSetID(set)], @"Backup interface/location identity changed");
+            }
             NSArray *order = [(__bridge NSArray *)SCNetworkSetGetServiceOrder(set) copy];
             CFArrayRef services = SCNetworkSetCopyServices(set);
             NSMutableArray *saved = [NSMutableArray array];
@@ -234,22 +260,23 @@ int main(int argc, const char **argv) { @autoreleasepool {
                 SCNetworkServiceRef service = (__bridge SCNetworkServiceRef)value;
                 NSString *name = bsdName(service);
                 if ([name isEqual:controlName] || [name isEqual:dataName]) [saved addObject:snapshot(service)];
-                if ([name isEqual:controlName]) { disableControlIP(service); ++controls; }
+                if ([name isEqual:controlName]) { configureControl(service); ++controls; }
                 if ([name isEqual:dataName] && !dataService) dataService = (SCNetworkServiceRef)CFRetain(service);
             }
             require(controls > 0, @"Wi-Fi control service not found; no settings committed");
             NSString *created = @"";
             if (!dataService) {
+                require(!repairing, @"Original data service missing; restore the backup before another setup");
                 dataService = SCNetworkServiceCreate(prefs, interface);
                 require(dataService && SCNetworkServiceEstablishDefaultConfiguration(dataService) &&
                         SCNetworkSetAddService(set, dataService), @"Create Ethernet data service failed");
                 created = (__bridge NSString *)SCNetworkServiceGetServiceID(dataService);
                 SCNetworkServiceSetName(dataService, CFSTR("Intel Wi-Fi Ethernet"));
             }
-            NSDictionary *backup = @{@"Format": @1, @"Services": saved, @"CreatedDataService": created,
+            NSDictionary *backup = originalBackup ?: @{@"Format": @1, @"Services": saved, @"CreatedDataService": created,
                 @"ControlBSDName": controlName, @"DataBSDName": dataName,
                 @"SetID": (__bridge NSString *)SCNetworkSetGetSetID(set), @"Order": order ?: @[]};
-            require([backup writeToFile:path atomically:YES], @"Cannot save rollback backup; no settings committed");
+            if (!repairing) require([backup writeToFile:path atomically:YES], @"Cannot save rollback backup; no settings committed");
             configureData(dataService);
             NSString *identifier = (__bridge NSString *)SCNetworkServiceGetServiceID(dataService);
             NSMutableArray *newOrder = [(order ? order : @[]) mutableCopy];
