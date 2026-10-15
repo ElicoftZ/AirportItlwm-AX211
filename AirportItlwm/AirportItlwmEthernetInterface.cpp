@@ -10,6 +10,7 @@
 
 #include <sys/_if_ether.h>
 #include <net80211/ieee80211_var.h>
+#include <net/kpi_interface.h>
 #ifdef AIRPORT_WCL
 #include <IOKit/IOCommandGate.h>
 #include "AirportItlwmV2.hpp"
@@ -313,6 +314,15 @@ const char *AirportItlwmDataInterface::getNamePrefix() const {
     // and prevent Wi-Fi BSD attachment. Reserve a separate unit namespace;
     // leave both the MAC and native WCL registration sequence unchanged.
     return "itl";
+}
+bool AirportItlwmDataInterface::initIfnetParams(struct ifnet_init_params *params) {
+    if (!IOEthernetInterface::initIfnetParams(params)) return false;
+    // Ethernet normally identifies ifnet by the physical MAC. Native Wi-Fi
+    // already owns that identity in the same family. NULL lets XNU identify
+    // this interface by name+unit (itlN); the actual link-layer MAC stays intact.
+    params->uniqueid = nullptr;
+    params->uniqueid_len = 0;
+    return true;
 }
 IOReturn AirportItlwmDataInterface::attachToDataLinkLayer(IOOptionBits options, void *parameter) {
     IOReturn status = IOEthernetInterface::attachToDataLinkLayer(options, parameter);

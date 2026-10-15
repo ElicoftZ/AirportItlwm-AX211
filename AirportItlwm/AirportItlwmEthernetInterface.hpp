@@ -55,6 +55,7 @@ class AirportItlwmDataInterface : public IOEthernetInterface {
     OSDeclareDefaultStructors(AirportItlwmDataInterface)
 public:
     const char *getNamePrefix() const override;
+    bool initIfnetParams(struct ifnet_init_params *) override;
     IOReturn attachToDataLinkLayer(IOOptionBits, void *) override;
 };
 #endif

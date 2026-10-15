@@ -39,6 +39,15 @@ The setup helper stopped before writing any IP preferences. Using a distinct
 data prefix repairs that naming conflict in the driver design. Registration,
 joining, DHCP and throughput after this repair still need physical verification.
 
+The second physical test of 2d402e4 restored native Wi-Fi registration and
+association. Ethernet still failed BSD attachment with
+`ifnet_allocate_extended error 16`, so setup again stopped before writing IP
+preferences or measuring throughput. Both interfaces inherited the physical
+MAC as their ifnet unique ID from IOEthernetInterface. The data interface now
+overrides initIfnetParams to select XNU's name+unit unique ID fallback, keeping
+the actual link-layer MAC unchanged. Physical dual-interface attachment and
+throughput after this additional repair remain unverified.
+
 The prefix hook and separate unit namespaces are described by
 [Apple's getNamePrefix API](https://developer.apple.com/documentation/kernel/ionetworkinterface/1810563-getnameprefix)
 and implemented in
